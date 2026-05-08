@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="id" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dasbor Keuangan Koperasi</title>
+  
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Library untuk Generate PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%); min-height: 100vh; }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
+</head>
+<body class="text-slate-800 antialiased h-full">
+  <div id="root" class="h-full"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect } = React;
+    // URL Google Sheets Anda
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw-SuuEKgc_uW1tv12HIGCVtQ_3HrtfsKA44OYvIPFUMm4r__t0LbIFlxfA2SaWSODy/exec';
+
+    function App() {
+      const [data, setData] = useState([]);
+      const [isLoading, setIsLoading] = useState(true);
+      const [currentTab, setCurrentTab] = useState('transactions');
+      
+      const [searchQuery, setSearchQuery] = useState('');
+      const [alertMonth, setAlertMonth] = useState('');
+      const [reportMonth, setReportMonth] = useState(''); // Untuk filter Rekening Koran
+      
+      const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+      const [toastMsg, setToastMsg] = useState('');
+      const [isSaving, setIsSaving] = useState(false);
+      const [isPrintingRK, setIsPrintingRK] = useState(false);
+      const [isPrintingStats, setIsPrintingStats] = useState(false);
+
+      const [formData, setFormData] = useState({
+        type: 'masuk',
+        date: new Date().toISOString().split('T')[0],
+        member_name: '',
+        amount: '',
+        description: '',
+        reference: '',
+        status: 'berhasil'
+      });
+
+      useEffect(() => {
+        fetchData();
+      }, []);
+
+      useEffect(() => {
+        lucide.createIcons();
+      });
+
+      const fetchData = async () => {
+        setIsLoading(true);
+        try {
+          const response = await fetch(SCRIPT_URL);
+          const result = await response.json();
+          setData(result);
+          
+          // Set default report month to latest available month
+          const months = Array.from(new Set(result.map(d => d.month).filter(Boolean))).sort().reverse();
+          if (months.length > 0 && !reportMonth) {
+            setReportMonth(months[0]);
+          }
+        } catch (error) {
+          console.error('Gagal menarik data:', error);
+          showToast('Gagal memuat data dari database');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const formatRp = (amount) => {
+        return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount || 0);
+      };
+
+      const showToast = (msg) => {
+        setToastMsg(msg);
+        setTimeout(() => setToastMsg(''), 3000);
+      };
+
+      const formatBulan = (val) => {
+        if (!val) return '-';
+        if (typeof val === 'string' && val.length === 7 && val.indexOf('-') === 4) {
+          const [y, m] = val.split('-');
+          return new Date(y, m - 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+        }
+        const d = new Date(val);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+        }
+        return val;
+      };
+
+      const handleAddSubmit = async (e) => {
+        e.preventDefault();
+        setIsSaving(true);
+        
+        const newRecord = {
+          ...formData,
+          id: Date.now().toString(),
+          amount: parseInt(formData.amount) || 0,
+          month: formData.date.substring(0, 7)
+        };
+
+        try {
+          await fetch(SCRIPT_URL, {
+            method: 'POST',
+            body: JSON.stringify(newRecord)
+          });
+          
+          showToast('Transaksi berhasil disimpan!');
+          setIsAddModalOpen(false);
+          setFormData({ ...formData, member_name: '', amount: '', description: '', reference: '' });
+          fetchData();
+        } catch (error) {
+          console.error('Error saving:', error);
+          showToast('Gagal menyimpan transaksi');
+        } finally {
+          setIsSaving(false);
+        }
+      };
+
+      // Metrik Dashboard
+      const metrics = useMemo(() => {
+        const income = data.filter(d => d.type === 'masuk' && d.status !== 'gagal_debet').reduce((sum, d) => sum + (d.amount || 0), 0);
+        const expense = data.filter(d => d.type === 'keluar' && d.status !== 'gagal_debet').reduce((sum, d) => sum + (d.amount || 0), 0);
+        return { income, expense, balance: income - expense };
+      }, [data]);
+
+      // Data Transaksi
+      const filteredTransactions = useMemo(() => {
+        let filtered = data;
+        if (reportMonth) filtered = filtered.filter(d => d.month === reportMonth);
+        if (searchQuery) filtered = filtered.filter(d => d.member_name && d.member_name.toLowerCase().includes(searchQuery.toLowerCase()));
+        
+        return filtered.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      }, [data, searchQuery, reportMonth]);
+
+      // Data Peringatan
+      const failedTransactions = useMemo(() => {
+        let failed = data.filter(d => d.status === 'gagal_debet');
+        if (alertMonth) failed = failed.filter(d => d.month === alertMonth);
+        return failed.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      }, [data, alertMonth]);
+
+      // Data Statistik & Logika Warna
+      const getSeverity = (count) => {
+        if (count >= 5) return { bg: 'bg-red-50', border: 'border-red-500', text: 'text-red-700', icon: '🔴', label: 'Tingkat Kritis (5+ kali)' };
+        if (count >= 3) return { bg: 'bg-orange-50', border: 'border-orange-500', text: 'text-orange-700', icon: '🟧', label: 'Waspada (3-4 kali)' };
+        return { bg: 'bg-yellow-50', border: 'border-yellow-400', text: 'text-yellow-700', icon: '🟨', label: 'Perhatian (1-2 kali)' };
+      };
+
+      const memberStats = useMemo(() => {
+        const stats = {};
+        data.filter(d => d.status === 'gagal_debet').forEach(d => {
+          if (!stats[d.member_name]) stats[d.member_name] = { count: 0, total: 0 };
+          stats[d.member_name].count++;
+          stats[d.member_name].total += (d.amount || 0);
+        });
+        
+        return Object.entries(stats)
+          .map(([name, val]) => ({ name, ...val, severity: getSeverity(val.count) }))
+          .sort((a, b) => b.count - a.count); // Urutkan dari yang paling sering
+      }, [data]);
+
+      const availableMonths = useMemo(() => {
+        const months = new Set(data.map(d => d.month).filter(Boolean));
+        return Array.from(months).sort().reverse();
+      }, [data]);
+
+      // Fungsi Helper untuk Header Resmi Koperasi
+      const addOfficialHeader = async (doc) => {
+        const pageWidth = doc.internal.pageSize.width;
+        
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        const imgPromise = new Promise((resolve) => {
+            img.onload = () => resolve(img);
+            img.onerror = () => resolve(null);
+            img.src = 'https://i.ibb.co.com/WvTwLMn5/image-1.png';
+        });
+        
+        const loadedImg = await imgPromise;
+        if (loadedImg) {
+            // Posisi X=15, Y=10, Lebar=25, Tinggi=25
+            doc.addImage(loadedImg, 'PNG', 15, 10, 25, 25);
+        }
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(14);
+        doc.text("KOPKAR AKM", pageWidth / 2, 16, { align: "center" });
+        
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.text("Badan Hukum Nomor : 2128/BH/IX Tanggal 31 Juli 1995", pageWidth / 2, 22, { align: "center" });
+        
+        doc.setFontSize(9);
+        doc.text("Office : Jl. Jend. A. Yani Komp. Swadharma Jalur II Blok Mawar RT IV", pageWidth / 2, 27, { align: "center" });
+        doc.text("Kel. Mabuun Kec. Murung Pudak Kab. Tabalong Prov. Kalimantan Selatan", pageWidth / 2, 32, { align: "center" });
+        doc.text("Kode Pos 71571  Telp/Fax : 0526 - 2023593  email : kopkar.adaro@gmail.com", pageWidth / 2, 37, { align: "center" });
+        
+        doc.setLineWidth(0.5);
+        doc.line(14, 42, pageWidth - 14, 42);
+      };
+
+      // Cetak PDF Rekening Koran
+      const printRekeningKoran = async () => {
+        if (filteredTransactions.length === 0) {
+          showToast('Tidak ada data di bulan ini untuk dicetak');
+          return;
+        }
+        setIsPrintingRK(true);
+        
+        try {
+          const doc = new window.jspdf.jsPDF('landscape');
+          
+          await addOfficialHeader(doc);
+
+          doc.setFontSize(14);
+          doc.setFont("helvetica", "bold");
+          doc.text(`Rekening Koran Koperasi - Periode ${formatBulan(reportMonth)}`, doc.internal.pageSize.width / 2, 52, { align: "center" });
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "normal");
+          doc.text(`Dicetak pada: ${new Date().toLocaleDateString('id-ID')}`, doc.internal.pageSize.width / 2, 57, { align: "center" });
+
+          const tableColumn = ["Tanggal", "Anggota", "No. Referensi", "Keterangan", "Debit (Keluar)", "Kredit (Masuk)", "Status"];
+          const tableRows = [];
+
+          let totalDebit = 0;
+          let totalKredit = 0;
+
+          filteredTransactions.forEach(t => {
+            const isKeluar = t.type === 'keluar';
+            const isMasuk = t.type === 'masuk';
+            const nominal = formatRp(t.amount);
+            
+            if (t.status !== 'gagal_debet') {
+              if (isKeluar) totalDebit += t.amount;
+              if (isMasuk) totalKredit += t.amount;
+            }
+
+            const rowData = [
+              t.date ? t.date.substring(0,10) : '-',
+              t.member_name || '-',
+              t.reference || '-',
+              t.description || '-',
+              isKeluar ? nominal : '-',
+              isMasuk ? nominal : '-',
+              t.status === 'gagal_debet' ? 'Gagal' : 'Berhasil'
+            ];
+            tableRows.push(rowData);
+          });
+
+          tableRows.push(['', '', '', 'TOTAL TRANSAKSI BERHASIL', formatRp(totalDebit), formatRp(totalKredit), '']);
+
+          doc.autoTable({
+            head: [tableColumn],
+            body: tableRows,
+            startY: 63,
+            theme: 'grid',
+            styles: { fontSize: 8 },
+            headStyles: { fillColor: [41, 128, 185] },
+            willDrawCell: function(data) {
+              if (data.row.index === tableRows.length - 1) {
+                doc.setFont("helvetica", "bold");
+                data.cell.styles.fillColor = [240, 240, 240];
+              }
+            }
+          });
+
+          doc.save(`Rekening_Koran_${reportMonth}.pdf`);
+        } catch (err) {
+          console.error(err);
+          showToast('Gagal memproses PDF');
+        } finally {
+          setIsPrintingRK(false);
+        }
+      };
+
+      // Cetak PDF Gagal Debet
+      const printGagalDebet = async () => {
+        if (memberStats.length === 0) {
+          showToast('Tidak ada data gagal debet untuk dicetak');
+          return;
+        }
+        setIsPrintingStats(true);
+        
+        try {
+          const doc = new window.jspdf.jsPDF('portrait');
+          
+          await addOfficialHeader(doc);
+
+          doc.setFontSize(14);
+          doc.setFont("helvetica", "bold");
+          doc.text(`Laporan Anggota Gagal Debet Tahun Berjalan`, doc.internal.pageSize.width / 2, 52, { align: "center" });
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "normal");
+          doc.text(`Tingkat Keparahan: Merah (5+ kali), Orange (3-4 kali), Kuning (1-2 kali)`, doc.internal.pageSize.width / 2, 57, { align: "center" });
+
+          const tableColumn = ["Peringkat", "Nama Anggota", "Frekuensi", "Total Tunggakan", "Status"];
+          const tableRows = [];
+
+          memberStats.forEach((m, index) => {
+            let statusText = '';
+            if (m.count >= 5) statusText = 'Kritis';
+            else if (m.count >= 3) statusText = 'Waspada';
+            else statusText = 'Perhatian';
+
+            const rowData = [
+              `#${index + 1}`,
+              m.name,
+              `${m.count} kali`,
+              formatRp(m.total),
+              statusText
+            ];
+            tableRows.push(rowData);
+          });
+
+          doc.autoTable({
+            head: [tableColumn],
+            body: tableRows,
+            startY: 63,
+            theme: 'grid',
+            headStyles: { fillColor: [192, 57, 43] },
+            didParseCell: function(data) {
+              if (data.section === 'body' && data.column.index === 4) {
+                const count = memberStats[data.row.index].count;
+                if (count >= 5) data.cell.styles.textColor = [192, 57, 43]; // Merah
+                else if (count >= 3) data.cell.styles.textColor = [211, 84, 0]; // Orange
+                else data.cell.styles.textColor = [241, 196, 15]; // Kuning/Gold
+                data.cell.styles.fontStyle = 'bold';
+              }
+            }
+          });
+
+          // Keterangan tambahan di akhir laporan
+          const finalY = doc.lastAutoTable.finalY || 63;
+          doc.setFontSize(9);
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(50, 50, 50);
+          doc.text("Keterangan Indikator Keparahan (Status):", 14, finalY + 10);
+          doc.setFont("helvetica", "normal");
+          doc.text("- Kritis (Merah): Gagal debet 5 kali atau lebih.", 14, finalY + 15);
+          doc.text("- Waspada (Orange): Gagal debet 3 hingga 4 kali.", 14, finalY + 20);
+          doc.text("- Perhatian (Kuning): Gagal debet 1 hingga 2 kali.", 14, finalY + 25);
+
+          doc.save(`Laporan_Gagal_Debet_Koperasi.pdf`);
+        } catch (err) {
+          console.error(err);
+          showToast('Gagal memproses PDF');
+        } finally {
+          setIsPrintingStats(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen pb-12">
+          {/* Header */}
+          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-3 md:px-8 md:py-4 shadow-sm">
+            <div className="max-w-7xl mx-auto flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shadow-md">
+                  <i data-lucide="landmark" className="w-5 h-5 text-white"></i>
+                </div>
+                <div>
+                  <h1 className="text-sm md:text-lg font-bold text-slate-800 leading-tight">Dasbor Keuangan Koperasi</h1>
+                  <p className="text-xs text-slate-500 font-medium">Sinkronisasi Google Sheets</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsAddModalOpen(true)}
+                className="flex items-center gap-2 bg-blue-600 text-white text-sm font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-700 hover:shadow-lg transition-all"
+              >
+                <i data-lucide="plus" className="w-4 h-4"></i> <span className="hidden md:inline">Tambah Data</span>
+              </button>
+            </div>
+          </header>
+
+          <main className="max-w-7xl mx-auto px-4 md:px-8 py-8 space-y-6">
+            
+            {/* Metrik Dashboard */}
+            <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm min-w-0">
+                <p className="text-xs font-bold text-slate-500 uppercase mb-2">Total Saldo Riil</p>
+                <p className="text-2xl xl:text-3xl font-extrabold text-slate-800 truncate" title={formatRp(metrics.balance)}>{formatRp(metrics.balance)}</p>
+              </div>
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm min-w-0">
+                <p className="text-xs font-bold text-slate-500 uppercase mb-2">Kas Masuk Berhasil</p>
+                <p className="text-2xl xl:text-3xl font-extrabold text-emerald-600 truncate" title={formatRp(metrics.income)}>{formatRp(metrics.income)}</p>
+              </div>
+              <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm min-w-0">
+                <p className="text-xs font-bold text-slate-500 uppercase mb-2">Kas Keluar Riil</p>
+                <p className="text-2xl xl:text-3xl font-extrabold text-red-500 truncate" title={formatRp(metrics.expense)}>{formatRp(metrics.expense)}</p>
+              </div>
+            </section>
+
+            {/* Navigasi Tab */}
+            <div className="flex gap-2 bg-slate-800/60 p-1.5 rounded-xl w-fit backdrop-blur-sm border border-slate-700/50">
+              <button onClick={() => setCurrentTab('transactions')} className={`px-5 py-2.5 text-sm font-semibold rounded-lg transition-all ${currentTab === 'transactions' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-700/50'}`}>Rekening Koran</button>
+              <button onClick={() => setCurrentTab('alerts')} className={`px-5 py-2.5 text-sm font-semibold rounded-lg transition-all ${currentTab === 'alerts' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-700/50'}`}>Peringatan</button>
+              <button onClick={() => setCurrentTab('stats')} className={`px-5 py-2.5 text-sm font-semibold rounded-lg transition-all ${currentTab === 'stats' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-700/50'}`}>Statistik Gagal Debet</button>
+            </div>
+
+            {/* TAB 1: REKENING KORAN */}
+            {currentTab === 'transactions' && (
+              <section className="bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden">
+                <div className="p-5 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                  <div className="flex items-center gap-3 w-full md:w-auto">
+                    <select 
+                      value={reportMonth} 
+                      onChange={(e) => setReportMonth(e.target.value)}
+                      className="pl-3 pr-8 py-2 border border-slate-300 rounded-xl text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
+                    >
+                      <option value="">Semua Bulan</option>
+                      {availableMonths.map(m => <option key={m} value={m}>{formatBulan(m)}</option>)}
+                    </select>
+                    <button onClick={printRekeningKoran} disabled={isPrintingRK} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-slate-700 transition disabled:opacity-70">
+                      {isPrintingRK ? <i data-lucide="loader-2" className="w-4 h-4 animate-spin"></i> : <i data-lucide="printer" className="w-4 h-4"></i>}
+                      {isPrintingRK ? 'Memproses...' : 'Cetak PDF'}
+                    </button>
+                  </div>
+                  <div className="relative w-full md:w-72">
+                    <i data-lucide="search" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"></i>
+                    <input 
+                      type="text" placeholder="Cari nama anggota..." 
+                      value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+                    />
+                  </div>
+                </div>
+                
+                <div className="overflow-x-auto scrollbar-thin max-h-[600px] overflow-y-auto">
+                  <table className="w-full text-sm text-left whitespace-nowrap">
+                    <thead className="bg-slate-100/80 sticky top-0 border-b border-slate-200 text-slate-600 font-semibold z-10">
+                      <tr>
+                        <th className="px-6 py-4">Tanggal</th>
+                        <th className="px-6 py-4">Anggota</th>
+                        <th className="px-6 py-4">Ref / BDV</th>
+                        <th className="px-6 py-4 hidden md:table-cell">Keterangan</th>
+                        <th className="px-6 py-4 text-right">Debit (Keluar)</th>
+                        <th className="px-6 py-4 text-right">Kredit (Masuk)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {isLoading ? (
+                        <tr><td colSpan="6" className="px-6 py-12 text-center text-slate-500 font-medium"><i data-lucide="loader-2" className="w-6 h-6 animate-spin mx-auto mb-2"></i> Memuat data...</td></tr>
+                      ) : filteredTransactions.length === 0 ? (
+                        <tr><td colSpan="6" className="px-6 py-12 text-center text-slate-500 font-medium">Tidak ada data ditemukan.</td></tr>
+                      ) : (
+                        filteredTransactions.map(t => (
+                          <tr key={t.id} className={`hover:bg-slate-50 transition-colors ${t.status === 'gagal_debet' ? 'opacity-50 line-through' : ''}`}>
+                            <td className="px-6 py-4 text-slate-600">{t.date ? t.date.substring(0,10) : '-'}</td>
+                            <td className="px-6 py-4 font-bold text-slate-800">{t.member_name}</td>
+                            <td className="px-6 py-4 text-slate-500 font-mono text-xs">{t.reference || '-'}</td>
+                            <td className="px-6 py-4 text-slate-500 hidden md:table-cell truncate max-w-[200px]">{t.description || '-'}</td>
+                            <td className="px-6 py-4 text-right font-bold text-red-500">{t.type === 'keluar' ? formatRp(t.amount) : '-'}</td>
+                            <td className="px-6 py-4 text-right font-bold text-emerald-600">{t.type === 'masuk' ? formatRp(t.amount) : '-'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {/* TAB 2: PERINGATAN */}
+            {currentTab === 'alerts' && (
+              <section className="bg-white rounded-2xl border border-red-100 shadow-xl overflow-hidden">
+                <div className="p-5 border-b border-red-100 bg-red-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                  <h2 className="text-lg font-bold text-red-800 flex items-center gap-2">
+                    <i data-lucide="alert-triangle" className="w-5 h-5 text-red-600"></i> Pantauan Gagal Debet
+                  </h2>
+                  <select 
+                    value={alertMonth} 
+                    onChange={(e) => setAlertMonth(e.target.value)}
+                    className="pl-3 pr-8 py-2 border border-red-200 bg-white rounded-xl text-sm font-bold text-red-700 outline-none"
+                  >
+                    <option value="">Semua Bulan</option>
+                    {availableMonths.map(m => <option key={m} value={m}>{formatBulan(m)}</option>)}
+                  </select>
+                </div>
+                <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
+                  {failedTransactions.length === 0 ? (
+                    <div className="p-12 text-center text-slate-500 font-medium">Aman. Tidak ada gagal debet di periode ini.</div>
+                  ) : (
+                    failedTransactions.map(t => (
+                      <div key={t.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50">
+                        <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                          <i data-lucide="x-circle" className="w-5 h-5 text-red-600"></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-800 truncate" title={t.member_name}>{t.member_name}</p>
+                          <p className="text-xs text-slate-500 truncate" title={t.description}>{t.date ? t.date.substring(0,10) : '-'} &bull; {t.description}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-bold text-slate-500 mb-1">Tertunggak</p>
+                          <span className="bg-red-50 text-red-700 font-bold px-3 py-1 rounded-lg text-sm">{formatRp(t.amount)}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+            )}
+
+            {/* TAB 3: STATISTIK */}
+            {currentTab === 'stats' && (
+              <section className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+                <div className="p-5 border-b border-slate-200 bg-slate-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <i data-lucide="bar-chart-2" className="w-5 h-5 text-slate-600"></i> Peringkat Keparahan Tunggakan
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-1">Data dikalkulasi dari seluruh riwayat tahun berjalan.</p>
+                  </div>
+                  <button onClick={printGagalDebet} disabled={isPrintingStats} className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-700 transition shadow-md shadow-red-500/20 disabled:opacity-70">
+                    {isPrintingStats ? <i data-lucide="loader-2" className="w-4 h-4 animate-spin"></i> : <i data-lucide="printer" className="w-4 h-4"></i>}
+                    {isPrintingStats ? 'Memproses...' : 'Cetak PDF Laporan'}
+                  </button>
+                </div>
+                
+                <div className="p-4 bg-white border-b border-slate-100 grid grid-cols-3 gap-2 text-center text-xs font-bold">
+                  <div className="bg-red-50 text-red-700 p-2 rounded-lg border border-red-100">🔴 Merah (5+ kali)</div>
+                  <div className="bg-orange-50 text-orange-700 p-2 rounded-lg border border-orange-100">🟧 Orange (3-4 kali)</div>
+                  <div className="bg-yellow-50 text-yellow-700 p-2 rounded-lg border border-yellow-200">🟨 Kuning (1-2 kali)</div>
+                </div>
+
+                <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
+                  {memberStats.length === 0 ? (
+                    <div className="p-12 text-center text-slate-500 font-medium">Belum ada data anggota yang gagal debet.</div>
+                  ) : (
+                    memberStats.map((m, idx) => (
+                      <div key={m.name} className={`flex items-center gap-4 px-6 py-5 border-l-4 ${m.severity.border} ${m.severity.bg} transition-colors`}>
+                        <div className="w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center shrink-0 font-extrabold text-slate-700">
+                          #{idx + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-base font-bold text-slate-800 flex items-center gap-2">
+                            {m.name} <span className="text-xs px-2 py-0.5 rounded-full bg-white shadow-sm border border-slate-200">{m.severity.icon} {m.severity.label}</span>
+                          </p>
+                          <p className={`text-sm font-bold mt-1 ${m.severity.text}`}>Gagal sebanyak {m.count} kali</p>
+                        </div>
+                        <div className="text-right bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-100">
+                          <p className="text-xs font-bold text-slate-500 mb-0.5">Total Tunggakan</p>
+                          <p className="font-extrabold text-slate-800">{formatRp(m.total)}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+            )}
+
+          </main>
+
+          {/* Modal Tambah Data */}
+          {isAddModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => !isSaving && setIsAddModalOpen(false)}></div>
+              <div className="relative bg-white w-full max-w-lg rounded-2xl p-6 md:p-8 shadow-2xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold text-slate-800">Catat Transaksi Baru</h3>
+                  <button onClick={() => !isSaving && setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-600"><i data-lucide="x" className="w-5 h-5"></i></button>
+                </div>
+                
+                <form onSubmit={handleAddSubmit} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">Jenis Kas</label>
+                      <select required value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500">
+                        <option value="masuk">Pemasukan (Kredit)</option>
+                        <option value="keluar">Pengeluaran (Debit)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">Status</label>
+                      <select required value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500">
+                        <option value="berhasil">Berhasil</option>
+                        <option value="gagal_debet">Gagal Debet</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">Tanggal</label>
+                      <input required type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">No. Ref / BDV</label>
+                      <input type="text" placeholder="Cth: CK 714352" value={formData.reference} onChange={e => setFormData({...formData, reference: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500 font-mono" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1">Nama Anggota / Entitas</label>
+                    <input required type="text" placeholder="Nama anggota terkait..." value={formData.member_name} onChange={e => setFormData({...formData, member_name: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1">Jumlah Nominal (Rp)</label>
+                    <input required type="number" min="1" placeholder="Cth: 1500000" value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1">Keterangan / Rincian</label>
+                    <input type="text" placeholder="Detail transaksi..." value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-blue-500" />
+                  </div>
+
+                  <button type="submit" disabled={isSaving} className="w-full mt-4 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-70 flex justify-center items-center gap-2">
+                    {isSaving ? <><i data-lucide="loader-2" className="w-4 h-4 animate-spin"></i> Menyimpan ke Google Sheets...</> : 'Simpan Transaksi'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Toast */}
+          {toastMsg && (
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white text-sm font-medium px-4 py-3 rounded-lg shadow-xl flex items-center gap-2 animate-in slide-in-from-bottom-5">
+              <i data-lucide="info" className="w-4 h-4"></i> {toastMsg}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
