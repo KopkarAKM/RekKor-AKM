@@ -53,16 +53,16 @@
    </header>
 
    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-    <section class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
      <div class="card-hover glass rounded-2xl p-5 fade-in" style="animation-delay:0.1s;">
       <div class="flex items-center justify-between mb-3">
-       <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:#e0f2fe;">
-        <i data-lucide="wallet" style="width:20px;height:20px;color:#1e3a5f;"></i>
+       <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:#f1f5f9;">
+        <i data-lucide="history" style="width:20px;height:20px;color:#475569;"></i>
        </div>
-       <span class="text-xs font-medium px-2 py-1 rounded-full" style="background:#e0f2fe;color:#1e3a5f;">Total</span>
+       <span class="text-xs font-medium px-2 py-1 rounded-full" style="background:#f1f5f9;color:#475569;">Awal</span>
       </div>
-      <p class="text-xs font-medium" style="color:#64748b;">Total Saldo</p>
-      <p id="total-saldo" class="text-2xl font-bold mt-1 truncate" style="color:#1e3a5f;">Rp 0</p>
+      <p id="label-saldo-awal" class="text-xs font-medium" style="color:#64748b;">Saldo Awal</p>
+      <p id="saldo-awal" class="text-2xl font-bold mt-1 truncate" style="color:#475569;">Rp 0</p>
      </div>
      <div class="card-hover glass rounded-2xl p-5 fade-in" style="animation-delay:0.2s;">
       <div class="flex items-center justify-between mb-3">
@@ -84,9 +84,19 @@
       <p class="text-xs font-medium" style="color:#64748b;">Kas Keluar</p>
       <p id="kas-keluar" class="text-2xl font-bold mt-1 truncate" style="color:#dc2626;">Rp 0</p>
      </div>
+     <div class="card-hover glass rounded-2xl p-5 fade-in" style="animation-delay:0.4s;">
+      <div class="flex items-center justify-between mb-3">
+       <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:#e0f2fe;">
+        <i data-lucide="wallet" style="width:20px;height:20px;color:#1e3a5f;"></i>
+       </div>
+       <span class="text-xs font-medium px-2 py-1 rounded-full" style="background:#e0f2fe;color:#1e3a5f;">Akhir</span>
+      </div>
+      <p id="label-saldo-akhir" class="text-xs font-medium" style="color:#64748b;">Total Saldo Keseluruhan</p>
+      <p id="total-saldo" class="text-2xl font-bold mt-1 truncate" style="color:#1e3a5f;">Rp 0</p>
+     </div>
     </section>
 
-    <section class="slide-up" style="animation-delay:0.4s;">
+    <section class="slide-up" style="animation-delay:0.5s;">
      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
       <div class="flex gap-2 overflow-x-auto scroll-container pb-1">
        <button onclick="switchTab('semua')" id="tab-semua" class="tab-active px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all">Semua</button> 
@@ -407,17 +417,43 @@
   }
 
   function updateSummary() {
-    let masuk = 0, keluar = 0;
+    const filterBulan = document.getElementById('filter-bulan').value;
+    
+    let saldoAwal = 0;
+    let masuk = 0;
+    let keluar = 0;
+
     allData.forEach(d => {
-      if (d.type === 'masuk') masuk += d.jumlah;
-      else if (d.type === 'keluar') keluar += d.jumlah;
+      if (filterBulan) {
+        if (d.bulan < filterBulan) {
+          if (d.type === 'masuk') saldoAwal += d.jumlah;
+          else if (d.type === 'keluar') saldoAwal -= d.jumlah;
+        } else if (d.bulan === filterBulan) {
+          if (d.type === 'masuk') masuk += d.jumlah;
+          else if (d.type === 'keluar') keluar += d.jumlah;
+        }
+      } else {
+        if (d.type === 'masuk') masuk += d.jumlah;
+        else if (d.type === 'keluar') keluar += d.jumlah;
+      }
     });
-    document.getElementById('total-saldo').textContent = formatRp(masuk - keluar);
-    document.getElementById('total-saldo').title = formatRp(masuk - keluar);
+
+    const saldoAkhir = saldoAwal + masuk - keluar;
+
+    document.getElementById('saldo-awal').textContent = formatRp(saldoAwal);
+    document.getElementById('saldo-awal').title = formatRp(saldoAwal);
+    
     document.getElementById('kas-masuk').textContent = formatRp(masuk);
     document.getElementById('kas-masuk').title = formatRp(masuk);
+    
     document.getElementById('kas-keluar').textContent = formatRp(keluar);
     document.getElementById('kas-keluar').title = formatRp(keluar);
+    
+    document.getElementById('total-saldo').textContent = formatRp(saldoAkhir);
+    document.getElementById('total-saldo').title = formatRp(saldoAkhir);
+
+    document.getElementById('label-saldo-awal').textContent = filterBulan ? 'Saldo Awal Bulan' : 'Saldo Awal';
+    document.getElementById('label-saldo-akhir').textContent = filterBulan ? 'Saldo Akhir Bulan' : 'Total Saldo Keseluruhan';
   }
 
   function renderTable() {
@@ -491,7 +527,10 @@
     }
   }
 
-  function filterTransactions() { renderTable(); }
+  function filterTransactions() { 
+    renderTable(); 
+    updateSummary();
+  }
 
   function showAddForm() {
     document.getElementById('add-modal').style.display = 'flex';
