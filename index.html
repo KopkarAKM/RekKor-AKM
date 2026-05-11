@@ -46,7 +46,7 @@
         </div>
         <div class="leading-tight">
           <h1 class="text-white text-lg md:text-xl font-bold tracking-tight">Koperasi Finansial</h1>
-          <p class="text-blue-200 text-xs md:text-sm font-medium">Laporan Rekening Koran Kopkar AKM</p>
+          <p class="text-blue-200 text-xs md:text-sm font-medium">Bina Usaha Sejahtera</p>
         </div>
       </div>
       <div class="flex items-center space-x-4">
@@ -108,7 +108,7 @@
           </div>
         </div>
 
-        <!-- Dashboard Only: Filter Bulan (Memisahkan fungsionalitas agar UI lebih bersih) -->
+        <!-- Dashboard Only: Filter Bulan -->
         <div class="flex justify-end mt-4 mb-2 relative z-20">
           <div class="relative w-full sm:w-48">
             <select class="month-filter w-full pl-4 pr-8 py-2.5 rounded-xl border border-slate-200 bg-white shadow-sm text-sm font-medium outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200 appearance-none" onchange="syncMonthFilter(this.value)">
@@ -444,7 +444,6 @@
   let sunburstChart = null;
   let currentSunburstTx = []; 
   
-  // Single Source of Truth untuk Filter Bulan (Global tersinkronisasi)
   let currentMonthFilter = ''; 
 
   const dataHandler = {
@@ -479,12 +478,7 @@
 
   function syncMonthFilter(val) {
     currentMonthFilter = val;
-    
-    // Perbarui semua elemen dropdown yang memiliki class 'month-filter'
-    document.querySelectorAll('.month-filter').forEach(el => {
-      el.value = val;
-    });
-
+    document.querySelectorAll('.month-filter').forEach(el => { el.value = val; });
     filterTransactions();
   }
 
@@ -499,8 +493,6 @@
         opt.textContent = formatBulan(m, true); 
         select.appendChild(opt);
       });
-      
-      // Kembalikan ke state yang aktif jika masih ada datanya
       if (months.includes(currentMonthFilter)) {
         select.value = currentMonthFilter;
       } else {
@@ -508,7 +500,6 @@
       }
     });
 
-    // Reset filter state jika bulan tidak tersedia lagi di data
     if (currentMonthFilter && !months.includes(currentMonthFilter)) {
         currentMonthFilter = '';
     }
@@ -519,8 +510,8 @@
       const res = await fetch(SCRIPT_URL);
       const data = await res.json();
       
-      const formattedData = data.map(d => {
-        let tglRaw = d.tanggal || d.Tanggal || d.date || '';
+      const formattedData = data.map((d, idx) => {
+        let tglRaw = d.tanggal || d.date || '';
         let tglStr = ''; let blnStr = ''; let quarterStr = ''; let yearStr = '';
 
         if (tglRaw) {
@@ -544,17 +535,39 @@
           }
         }
 
+        const debitVal = Number(d.debit || d.Debit || d.DEBIT || 0);
+        const kreditVal = Number(d.kredit || d.Kredit || d.KREDIT || 0);
+        const saldoVal = Number(d.saldo || d.Saldo || d.SALDO || 0);
+        
+        let txType = '';
+        let txJumlah = 0;
+        
+        if (kreditVal > 0) {
+            txType = 'masuk';
+            txJumlah = kreditVal;
+        } else if (debitVal > 0) {
+            txType = 'keluar';
+            txJumlah = debitVal;
+        } else {
+            txType = (d.type || d.Type || '').toLowerCase();
+            txJumlah = Number(d.jumlah || d.amount || 0);
+        }
+
         return {
             ...d, 
-            __backendId: d.id || d.Id || Date.now().toString(),
+            __backendId: d.id || Date.now().toString(),
+            originalIndex: idx, 
             tanggal: tglStr,
             bulan: blnStr,
             quarter: quarterStr,
             year: yearStr,
-            type: (d.type || d.Type || '').toLowerCase(),
-            jumlah: Number(d.jumlah || d.Jumlah || d.amount || 0),
-            keterangan: d.keterangan || d.Keterangan || d.description || '',
-            no_referensi: d.no_referensi || d.No_referensi || d.reference || ''
+            type: txType,
+            jumlah: txJumlah,
+            debit: debitVal,
+            kredit: kreditVal,
+            saldo: saldoVal,
+            keterangan: d.keterangan || d.member_name || d.description || '',
+            no_referensi: d.no_referensi || d.reference || ''
         };
       });
       dataHandler.onDataChanged(formattedData);
@@ -577,24 +590,26 @@
 
   function updateSummary() {
     const filterBulan = currentMonthFilter;
-    let saldoAwal = 0, masuk = 0, keluar = 0;
+    let masuk = 0, keluar = 0, saldoAkhir = 0, saldoAwal = 0;
 
-    allData.forEach(d => {
-      if (filterBulan) {
-        if (d.bulan < filterBulan) {
-          if (d.type === 'masuk') saldoAwal += d.jumlah;
-          else if (d.type === 'keluar') saldoAwal -= d.jumlah;
-        } else if (d.bulan === filterBulan) {
-          if (d.type === 'masuk') masuk += d.jumlah;
-          else if (d.type === 'keluar') keluar += d.jumlah;
-        }
-      } else {
-        if (d.type === 'masuk') masuk += d.jumlah;
-        else if (d.type === 'keluar') keluar += d.jumlah;
-      }
+    let targetData = allData;
+    if (filterBulan) {
+      targetData = allData.filter(d => d.bulan === filterBulan);
+    }
+    
+    // Sortir berdasarkan urutan asli Excel untuk memastikan saldo akhir tepat
+    const sortedData = [...targetData].sort((a, b) => a.originalIndex - b.originalIndex);
+
+    sortedData.forEach(d => {
+      masuk += d.kredit || 0;
+      keluar += d.debit || 0;
     });
 
-    const saldoAkhir = saldoAwal + masuk - keluar;
+    if (sortedData.length > 0) {
+      saldoAkhir = sortedData[sortedData.length - 1].saldo || 0;
+      saldoAwal = saldoAkhir - masuk + keluar;
+    }
+
     document.getElementById('saldo-awal').textContent = formatRp(saldoAwal);
     document.getElementById('kas-masuk').textContent = formatRp(masuk);
     document.getElementById('kas-keluar').textContent = formatRp(keluar);
@@ -608,7 +623,6 @@
   function switchMainTab(tab) {
     currentMainTab = tab;
     
-    // Update Desktop Nav UI
     const dTabs = ['dashboard', 'transactions', 'reports', 'members'];
     dTabs.forEach(t => {
       const el = document.getElementById('d-nav-' + t);
@@ -625,7 +639,6 @@
       }
     });
 
-    // Update Mobile Nav UI
     dTabs.forEach(t => {
       const el = document.getElementById('m-nav-' + t);
       if(el) {
@@ -639,13 +652,11 @@
       }
     });
 
-    // Sections Visibility
     document.getElementById('section-dashboard').style.display = tab === 'dashboard' ? 'block' : 'none';
     document.getElementById('section-transactions').style.display = tab === 'transactions' ? 'block' : 'none';
     document.getElementById('section-reports').style.display = tab === 'reports' ? 'block' : 'none';
     document.getElementById('section-members').style.display = tab === 'members' ? 'block' : 'none';
 
-    // Trigger re-renders
     if (tab === 'transactions') renderTable();
     if (tab === 'reports') switchReportTab(currentReportTab); 
     if (tab === 'members') renderMemberStats();
@@ -690,7 +701,6 @@
     const tbody = document.getElementById('members-body');
     const stats = {};
     
-    // Algoritma Pengekstrak Nama (Cari pola "An <Nama>")
     allData.forEach(d => {
       let name = "Lainnya / Umum";
       const match = d.keterangan.match(/An\s+([A-Za-z\s]+)(?:-|,|$)/i);
@@ -743,8 +753,8 @@
       if (filterBulan && d.bulan !== filterBulan) return;
       const key = filterBulan ? d.tanggal.substring(8, 10) : d.bulan; 
       if (!aggData[key]) aggData[key] = { masuk: 0, keluar: 0 };
-      if (d.type === 'masuk') aggData[key].masuk += d.jumlah;
-      if (d.type === 'keluar') aggData[key].keluar += d.jumlah;
+      if (d.type === 'masuk') aggData[key].masuk += d.kredit;
+      if (d.type === 'keluar') aggData[key].keluar += d.debit;
     });
 
     const keys = Object.keys(aggData).sort();
@@ -794,7 +804,7 @@
       return true;
     });
     
-    filtered.sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+    filtered.sort((a, b) => a.originalIndex - b.originalIndex);
 
     if (filtered.length === 0) {
       tbody.innerHTML = '<tr class="block md:table-row"><td colspan="5" class="text-center py-12 text-slate-400 block md:table-cell bg-white md:bg-transparent rounded-xl shadow-sm md:shadow-none">Tidak ada transaksi ditemukan.</td></tr>';
@@ -870,7 +880,7 @@
       id: Date.now().toString(), type: typeValue, tanggal: document.getElementById('f-tanggal').value,
       jumlah: jumlahValue, keterangan: document.getElementById('f-keterangan').value,
       no_referensi: document.getElementById('f-referensi').value || '',
-      debit: typeValue === 'masuk' ? jumlahValue : 0, kredit: typeValue === 'keluar' ? jumlahValue : 0,
+      debit: typeValue === 'masuk' ? 0 : jumlahValue, kredit: typeValue === 'keluar' ? 0 : jumlahValue,
       saldo: 0, bulan: document.getElementById('f-tanggal').value.slice(0, 7)
     };
     try {
@@ -932,20 +942,9 @@
       let totalDebit = 0; 
       let totalKredit = 0; 
       let saldoAwal = 0;
+      let saldoAkhir = 0;
       
-      if (filterBulan) {
-        allData.forEach(d => { 
-          if (d.bulan < filterBulan) { 
-            if (d.type === 'masuk') saldoAwal += (d.jumlah || 0); 
-            if (d.type === 'keluar') saldoAwal -= (d.jumlah || 0); 
-          } 
-        });
-      }
-
-      let currentSaldo = saldoAwal;
-      tableRows.push(['-', '-', 'SALDO AWAL', '-', '-', formatRp(currentSaldo)]);
-
-      const monthData = allData.filter(d => filterBulan ? d.bulan === filterBulan : true).sort((a, b) => (a.tanggal || '').localeCompare(b.tanggal || ''));
+      const monthData = allData.filter(d => filterBulan ? d.bulan === filterBulan : true).sort((a, b) => a.originalIndex - b.originalIndex);
       
       if(monthData.length === 0) { 
         showToast('Tidak ada data untuk dicetak', true); 
@@ -954,26 +953,29 @@
         return; 
       }
 
+      monthData.forEach(d => {
+         totalDebit += d.debit;
+         totalKredit += d.kredit;
+      });
+
+      saldoAkhir = monthData[monthData.length - 1].saldo;
+      saldoAwal = saldoAkhir - totalKredit + totalDebit;
+
+      tableRows.push(['-', '-', 'SALDO AWAL', '-', '-', formatRp(saldoAwal)]);
+
       monthData.forEach(t => {
-        const isKeluar = t.type === 'keluar'; 
-        const isMasuk = t.type === 'masuk'; 
-        const nominal = formatRp(t.jumlah);
-        
-        if (isKeluar) { totalDebit += (t.jumlah || 0); currentSaldo -= (t.jumlah || 0); }
-        if (isMasuk) { totalKredit += (t.jumlah || 0); currentSaldo += (t.jumlah || 0); }
-        
         tableRows.push([ 
           t.tanggal ? t.tanggal.substring(0,10) : '-', 
           t.no_referensi || '-', 
           t.keterangan || '-', 
-          isKeluar ? nominal : '-', 
-          isMasuk ? nominal : '-', 
-          formatRp(currentSaldo) 
+          t.debit > 0 ? formatRp(t.debit) : '-', 
+          t.kredit > 0 ? formatRp(t.kredit) : '-', 
+          formatRp(t.saldo) 
         ]);
       });
 
       tableRows.push(['', '', filterBulan ? 'TOTAL MUTASI BULAN INI' : 'TOTAL MUTASI', formatRp(totalDebit), formatRp(totalKredit), '-']);
-      tableRows.push(['', '', 'SALDO AKHIR', '-', '-', formatRp(currentSaldo)]);
+      tableRows.push(['', '', 'SALDO AKHIR', '-', '-', formatRp(saldoAkhir)]);
 
       doc.autoTable({ 
         head: [tableColumn], 
@@ -1026,23 +1028,25 @@
   }
 
   function getWaterfallData(periodVal, groupType) {
-    let saldoAwal = 0, masuk = 0, keluar = 0;
-    allData.forEach(d => {
-      let dPeriod = '';
-      if (groupType === 'monthly') dPeriod = d.bulan;
-      else if (groupType === 'quarterly') dPeriod = d.quarter;
-      else dPeriod = d.year;
+    let masuk = 0, keluar = 0, saldoAwal = 0, saldoAkhir = 0;
+    
+    const periodTxs = allData.filter(d => {
+      if (groupType === 'monthly') return d.bulan === periodVal;
+      if (groupType === 'quarterly') return d.quarter === periodVal;
+      return d.year === periodVal;
+    }).sort((a, b) => a.originalIndex - b.originalIndex);
 
-      if (dPeriod < periodVal) {
-        if (d.type === 'masuk') saldoAwal += (d.jumlah || 0);
-        if (d.type === 'keluar') saldoAwal -= (d.jumlah || 0);
-      } else if (dPeriod === periodVal) {
-        if (d.type === 'masuk') masuk += (d.jumlah || 0);
-        if (d.type === 'keluar') keluar += (d.jumlah || 0);
-      }
+    periodTxs.forEach(d => {
+      masuk += d.kredit || 0;
+      keluar += d.debit || 0;
     });
-    const saldoAkhir = saldoAwal + masuk - keluar;
-    const invisibleBase = [0, saldoAwal, saldoAwal + masuk - keluar, 0];
+
+    if (periodTxs.length > 0) {
+      saldoAkhir = periodTxs[periodTxs.length - 1].saldo || 0;
+      saldoAwal = saldoAkhir - masuk + keluar;
+    }
+    
+    const invisibleBase = [0, saldoAwal, saldoAkhir, 0];
     const visibleData = [
       { value: saldoAwal, itemStyle: { color: '#1e3a5f' } }, { value: masuk, itemStyle: { color: '#2ecc71' } },
       { value: keluar, itemStyle: { color: '#e74c3c' } }, { value: saldoAkhir, itemStyle: { color: '#1e3a5f' } }
@@ -1103,7 +1107,7 @@
       if (groupType === 'monthly') return d.bulan === periodKey;
       if (groupType === 'quarterly') return d.quarter === periodKey;
       return d.year === periodKey;
-    }).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+    }).sort((a, b) => a.originalIndex - b.originalIndex);
 
     if (items.length === 0) {
       tbody.innerHTML = '<tr class="block md:table-row"><td colspan="3" class="text-center py-12 text-slate-400 bg-white rounded-xl block md:table-cell">Tidak ada rincian transaksi.</td></tr>';
@@ -1306,7 +1310,7 @@
          <th class="text-right px-5 py-4 font-bold text-slate-600 uppercase text-xs">Jumlah</th>
         </tr>
       `;
-      const txs = currentSunburstTx.filter(t => t.level1 === filterKat).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+      const txs = currentSunburstTx.filter(t => t.level1 === filterKat).sort((a, b) => a.originalIndex - b.originalIndex);
       if (txs.length === 0) { tbody.innerHTML = '<tr class="block md:table-row"><td colspan="4" class="text-center py-12 text-slate-400 bg-white rounded-xl block md:table-cell">Tidak ada rincian transaksi untuk kategori ini.</td></tr>'; return; }
 
       tbody.innerHTML = txs.map(tx => `
@@ -1347,7 +1351,7 @@
         tableRows = sunburstDataCache.map(row => [ row.rootType, row.level1, row.level2, formatRp(row.total), `${row.percent}%` ]);
       } else {
         tableColumn = ["Tanggal", "Subkategori", "Keterangan", "Jumlah"];
-        const txs = currentSunburstTx.filter(t => t.level1 === filterKat).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+        const txs = currentSunburstTx.filter(t => t.level1 === filterKat).sort((a, b) => a.originalIndex - b.originalIndex);
         tableRows = txs.map(tx => [ tx.tanggal ? tx.tanggal.substring(0, 10) : '-', tx.level2, tx.keterangan, formatRp(tx.jumlah) ]);
       }
       doc.autoTable({ head: [tableColumn], body: tableRows, startY: 235, theme: 'grid', styles: { fontSize: 8 }, headStyles: { fillColor: [30, 58, 95] } });
